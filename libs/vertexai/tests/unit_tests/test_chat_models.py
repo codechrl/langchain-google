@@ -5,7 +5,7 @@ import json
 import sys
 import warnings
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -2243,6 +2243,51 @@ def test_json_mode_pydantic_v1_backward_compatibility() -> None:
     assert "properties" in schema
     assert "name" in schema["properties"]
     assert "age" in schema["properties"]
+
+
+def test_with_structured_output_json_schema() -> None:
+    """`method='json_schema'` binds `response_json_schema` with refs inlined.
+
+    Vertex requires `response_schema` to be omitted when `response_json_schema` is
+    set, and rejects sibling keywords next to a `$ref`, so nested models are
+    inlined before they are sent.
+    """
+
+    class Product(BaseModel):
+        """A single product."""
+
+        name: str
+
+    class Inventory(BaseModel):
+        """A list of products."""
+
+        items: list[Product]
+
+    llm = ChatVertexAI(model=_DEFAULT_MODEL_NAME, project="test-project")
+    structured_llm = llm.with_structured_output(Inventory, method="json_schema")
+    bound_kwargs = cast("Any", structured_llm).first.kwargs
+
+    assert bound_kwargs["response_mime_type"] == "application/json"
+    assert "response_schema" not in bound_kwargs
+
+    schema = bound_kwargs["response_json_schema"]
+    assert "$defs" not in schema
+    assert schema["properties"]["items"]["items"]["properties"] == {
+        "name": {"title": "Name", "type": "string"}
+    }
+
+
+def test_generation_config_gemini_response_json_schema() -> None:
+    """`response_json_schema` reaches `GenerationConfig`."""
+    model = ChatVertexAI(model=_DEFAULT_MODEL_NAME, project="test-project")
+    schema = {"type": "object", "properties": {"name": {"type": "string"}}}
+
+    generation_config = model._generation_config_gemini(
+        response_mime_type="application/json",
+        response_json_schema=schema,
+    )
+
+    assert generation_config.response_json_schema == schema
 
 
 def test_thought_signature_conversion() -> None:
